@@ -24,6 +24,7 @@ void create_group(int client_socket, string group_name){
     groups[group_name].insert(client_socket);
     // broadcast_message(-1, "Group created - "+group_name);
 }
+void user_exit(int client_socket, string username);
 void join_group(int client_socket, string group_name){
     if(groups.find(group_name)==groups.end()){
         // private_message(-1, clients[client_socket], "Group not found!");
@@ -53,8 +54,15 @@ void leave_group(int client_socket, string group_name){
         // private_message(-1, clients[client_socket], "You were not a part of that group!");
     }
 }
-int do_auth(string username, string password) {
-	return 0;
+
+int do_auth(string username, string password)
+{
+    if (users.find(username) != users.end()) {
+        if (users[username] == password) {
+            return 0;
+        }
+    }
+    return -1;
 }
 
 void private_message(int client_socket, string user_name, string pvt_msg) {
@@ -65,8 +73,11 @@ void broadcast_message(int client_socket, string msg) {
 	return ;
 }
 
-int process_client_message(){
-    string message = "";
+void user_exit(int socket, string username) {
+};
+
+int process_client_message(char *buf){
+    string message = buf;
     int client_socket = 1;
     if(message.starts_with("/msg")){
         size_t space1 = message.find(' ');
@@ -109,7 +120,11 @@ int process_client_message(){
             leave_group(client_socket, group_name);
         }
     }
-
+    else {
+	    // invalid message
+	    printf("[server] can't understand message\n%s\n", buf);
+	    return 1;
+    }
 
     return 0;
 }
@@ -129,7 +144,8 @@ void process_connection(
 	ret = write(conn_fd, auth1, strlen(auth1) + 1);
 	cout << "server sent bytes " << ret << " to FD " << conn_fd << endl;
 	assert(ret == 17);
-	ret = read(conn_fd, sbuf, 1024);
+	ret = read(conn_fd, username, 64);
+	assert(ret < 63);
 	cout << "server received bytes: " << ret << " from FD " << conn_fd << endl;
 	cout << sbuf << endl;
 
@@ -137,33 +153,64 @@ void process_connection(
 	ret = write(conn_fd, auth1, strlen(auth1) + 1);
 	cout << "server sent bytes " << ret << " to FD " << conn_fd << endl;
 	assert(ret == 17);
-	ret = read(conn_fd, sbuf, 1024);
+	ret = read(conn_fd, password, 64);
+	assert(ret < 63);
 	cout << "server received bytes: " << ret << " from FD " << conn_fd << endl;
 	cout << sbuf << endl;
 
 	ret = do_auth(username, password);
 	if (ret == -1) {
-		dprintf(conn_fd, "Authentication failed\n");
+		dprintf(conn_fd, "Authentication failed");
 		goto thread_exit;
 	}
-	ret = dprintf(conn_fd, "Authentication successful\n");
+	ret = dprintf(conn_fd, "Authentication successful");
 	assert (ret > 10);
 
 	while (1) {
 		ret = read(conn_fd, sbuf, 1024);
-		assert(ret > 2);
-		assert(ret < 1023);
+		if (ret <= 0) {
+			printf("[server] looks like user %s left\n", username);
+			goto thread_exit;
+		}
 		printf("server received message from %s: (%d)\n%s\n\n", username, ret, sbuf);
+		ret = process_client_message(&sbuf[0]);
+		if (ret == 1)
+			goto thread_exit;
+		memset(sbuf, 0, 1024);
 		// for now, the server echoes all messages twice
 		dprintf(conn_fd, "%s\n%s\n", sbuf, sbuf);
 		goto thread_exit;
 	}
 
 thread_exit:
+	ret = close(conn_fd);
+	assert(ret == 0);
 	cout << "*************** EXITING ************************" << endl;
 	cout << "New thread; tid "<< tid << "\tpid: " << getpid() << "\tpgid: " << getpgid(0) << endl;
 }
 
+void load_users()
+{
+    ifstream file("users.txt");
+    if (!file)
+    {
+        cerr << "Error: Could not open users.txt\n";
+        return;
+    }
+
+    string line;
+    while (getline(file, line))
+    {
+        size_t delimiter = line.find(':');
+        if (delimiter != string::npos)
+        {
+            string username = line.substr(0, delimiter);
+            string password = line.substr(delimiter + 1);
+            users[username] = password;
+        }
+    }
+    file.close();
+}
 
 
 int main () {
@@ -182,6 +229,7 @@ int main () {
 	};
 	// setsockopt() seems unnecessary for now.
 
+	load_users();
 	int ret = bind(server_fd, (struct sockaddr *) &sock_addr, sizeof(sock_addr));
 	assert(ret == 0);
 

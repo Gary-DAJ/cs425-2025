@@ -1,5 +1,6 @@
 #include <iostream>
 #include <cstring>
+#include <bits/stdc++.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
@@ -12,14 +13,14 @@
 
 using namespace std;
 
+unordered_map<string, int> online_users;
 unordered_map<int, string> clients; // Client socket -> username
-unordered_map<string, int> sockets;
 unordered_map<string, string> users; // Username -> password
 unordered_map<string, unordered_set<int>> groups; // Group -> client sockets
 
 // General APIs needed:
 int do_auth(string username, string password);
-
+void private_message(int client_socket, string user_name, string pvt_msg);
 void create_group(int client_socket, string group_name){
     groups[group_name] = unordered_set<int>();
     groups[group_name].insert(client_socket);
@@ -56,10 +57,15 @@ void leave_group(int client_socket, string group_name){
     }
 }
 
-int do_auth(string username, string password)
+int do_auth(string username, string password, int fd)
 {
     if (users.find(username) != users.end()) {
         if (users[username] == password) {
+            if (online_users.find(username) != online_users.end()) {
+                dprintf(fd, "[server] Already logged in!\n");
+                return -1;
+            }
+            online_users[username] = fd;
             return 0;
         }
     }
@@ -68,11 +74,14 @@ int do_auth(string username, string password)
 
 void private_message(int client_socket, string user_name, string pvt_msg){
     string msg = "[Private - "+clients[client_socket]+"]: "+pvt_msg;
-    if(sockets.find(user_name)!=sockets.end()){
-        if(dprintf(sockets[user_name], msg.c_str())<0){
+    if(online_users.find(user_name)!=online_users.end()){
+        if(dprintf(online_users[user_name], msg.c_str())<0){
             dprintf(client_socket, "Error: Message not delivered!");
         }
+    } else {
+            dprintf(client_socket, "Error: Message not delivered!");
     }
+
 }
 void broadcast_message(int client_socket, string broadcast_msg){
     string msg = "[Broadcast - ]"+clients[client_socket]+"]: "+broadcast_msg;
@@ -83,12 +92,13 @@ void broadcast_message(int client_socket, string broadcast_msg){
     }
 }
 
-void user_exit(int fd, char *username) {
-	return;
-	// todo: remove from online_users map, etc
-}
+void user_exit(int socket, char *username) {
+    online_users.erase(username);
+    int ret = close(socket);
+    assert(ret == 0);
+};
 
-int process_client_message(char *buf){
+int process_client_message(char *buf, int sender_fd){
     string message = buf;
     int client_socket = 1;
     if(message.starts_with("/msg")){
@@ -97,7 +107,14 @@ int process_client_message(char *buf){
         if(space1 != string::npos && space2 != string::npos){
             string user_name = message.substr(space1 + 1, space2 - space1 - 1);
             string pvt_msg = message.substr(space2 + 1);
-            private_message(client_socket, user_name, pvt_msg);
+            if (online_users.find(user_name) == online_users.end()) {
+                dprintf(sender_fd, "[server] Error: user %s is not online", user_name.c_str());
+                return 10;
+            }
+            auto it = online_users.find(user_name);
+            assert(it != online_users.end());
+            int recipient_fd = it->second;
+            private_message(recipient_fd, user_name, pvt_msg);
         }
     }else if(message.starts_with("/broadcast")){
         size_t space = message.find(' ');
@@ -159,24 +176,25 @@ void process_connection(
 	ret = read(conn_fd, username, 64);
 	assert(ret < 63);
 	cout << "server received bytes: " << ret << " from FD " << conn_fd << endl;
-	cout << sbuf << endl;
+	string uname_s = username;
 
 	char auth2[] = "Enter password: ";
-	ret = write(conn_fd, auth1, strlen(auth1) + 1);
+	ret = write(conn_fd, auth2, strlen(auth1) + 1);
 	cout << "server sent bytes " << ret << " to FD " << conn_fd << endl;
 	assert(ret == 17);
 	ret = read(conn_fd, password, 64);
 	assert(ret < 63);
 	cout << "server received bytes: " << ret << " from FD " << conn_fd << endl;
-	cout << sbuf << endl;
 
-	ret = do_auth(username, password);
+	ret = do_auth(username, password, conn_fd);
 	if (ret == -1) {
 		dprintf(conn_fd, "Authentication failed");
 		goto thread_exit;
 	}
 	ret = dprintf(conn_fd, "Authentication successful");
 	assert (ret > 10);
+	clients[conn_fd] = uname_s;
+	online_users[uname_s] = conn_fd;
 
 	while (1) {
 		ret = read(conn_fd, sbuf, 1024);
@@ -186,7 +204,7 @@ void process_connection(
 			goto thread_exit;
 		}
 		printf("server received message from %s: (%d)\n%s\n\n", username, ret, sbuf);
-		ret = process_client_message(&sbuf[0]);
+		ret = process_client_message(&sbuf[0], conn_fd);
 		if (ret == 1)
 			goto thread_exit;
 		memset(sbuf, 0, 1024);
@@ -197,6 +215,7 @@ void process_connection(
 
 thread_exit:
 	ret = close(conn_fd);
+	online_users.erase(uname_s);
 	assert(ret == 0);
 	cout << "*************** EXITING ************************" << endl;
 	cout << "New thread; tid "<< tid << "\tpid: " << getpid() << "\tpgid: " << getpgid(0) << endl;

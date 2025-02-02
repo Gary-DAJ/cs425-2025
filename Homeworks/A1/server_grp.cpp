@@ -21,39 +21,53 @@ unordered_map<string, unordered_set<int>> groups; // Group -> client sockets
 // General APIs needed:
 int do_auth(string username, string password);
 void private_message(int client_socket, string user_name, string pvt_msg);
+void broadcast_message(int client_socket, string broadcast_msg);
 void create_group(int client_socket, string group_name){
-    groups[group_name] = unordered_set<int>();
-    groups[group_name].insert(client_socket);
-    // broadcast_message(-1, "Group created - "+group_name);
+    if(groups.find(group_name)!=groups.end()){
+        dprintf(client_socket, "Error: Group name already exists!");
+    }else{
+        groups[group_name] = unordered_set<int>();
+        groups[group_name].insert(client_socket); // User who created the group is added to it
+        for(auto &[conn_fd, _]: clients){ // All users online are informed about the new group
+            dprintf(conn_fd, ("Group "+group_name+" created by "+clients[client_socket]).c_str());
+        }
+    }
 }
 void user_exit(int client_socket, char* username);
 void join_group(int client_socket, string group_name){
     if(groups.find(group_name)==groups.end()){
-        // private_message(-1, clients[client_socket], "Group not found!");
+        dprintf(client_socket, ("Error: Group "+group_name+" does not exist!").c_str());
     }else{
-        groups[group_name].insert(client_socket);
-        // group_message(-1, group_name, clients[client_socket] + " - joined the group - " << group_name << "\n");
+        groups[group_name].insert(client_socket); // Adding the user to the group
+        for(auto &conn_fd: groups[group_name]){ // All members of the group are informed about the new member
+            dprintf(conn_fd, ("\t["+group_name+"]: "+clients[client_socket]+" joined the chat.").c_str());
+        }
     }
 }
 void group_message(int client_socket, string group_name, string group_msg){
     if(groups.find(group_name)==groups.end()){
-        // private_message(-1, clients[client_socket], "Group not found!");
+        dprintf(client_socket, "Error: Group does not exist!");
     }else{
-        string message = "["+group_name+"]: " + (client_socket==-1?"":
-                        "["+clients[client_socket]+"]: ") + group_msg;
-        for(int sock : groups[group_name]){
-            //
+        string message = "\t["+group_name+": " + "("+clients[client_socket]+")]: " + group_msg;
+        for(int conn_fd : groups[group_name]){
+            dprintf(conn_fd, message.c_str());
         }
     }
 }
 void leave_group(int client_socket, string group_name){
     if(groups.find(group_name)==groups.end()){
-        // private_message(-1, clients[client_socket], "Group not found!");
+        dprintf(client_socket, "Error: Group does not exist!");
     }else if(groups[group_name].erase(client_socket)){
-        // group_message(-1, group_name, clients[client_socket] + " - left the group - " << group_name << "\n");
+        for(auto &conn_fd: group_name){ // Inform all group members that the member has left
+            dprintf(conn_fd, ("\t["+group_name+"]: "+clients[client_socket]+" left the chat.").c_str());
+        }
+        groups[group_name].erase(client_socket);
+        if(groups[group_name].empty()){ // If no member is left in the group, delete it
+            groups.erase(group_name);
+        }
         // private_message(-1, clients[client_socket], "You left the group - "+group_name);
     }else{
-        // private_message(-1, clients[client_socket], "You were not a part of that group!");
+        dprintf(client_socket, "Error: You are not part of the group!");
     }
 }
 
@@ -73,18 +87,18 @@ int do_auth(string username, string password, int fd)
 }
 
 void private_message(int client_socket, string user_name, string pvt_msg){
-    string msg = "[Private - "+clients[client_socket]+"]: "+pvt_msg;
+    string msg = "[Private: ("+clients[client_socket]+")]: "+pvt_msg;
     if(online_users.find(user_name)!=online_users.end()){
         if(dprintf(online_users[user_name], msg.c_str())<0){
             dprintf(client_socket, "Error: Message not delivered!");
         }
     } else {
-            dprintf(client_socket, "Error: Message not delivered!");
+            dprintf(client_socket, "Error: User not online!");
     }
 
 }
 void broadcast_message(int client_socket, string broadcast_msg){
-    string msg = "[Broadcast - ]"+clients[client_socket]+"]: "+broadcast_msg;
+    string msg = "[Broadcast: (]"+clients[client_socket]+")]: "+broadcast_msg;
     for(auto &[conn_fd, name]: clients){
         if(dprintf(conn_fd, msg.c_str())<0){
             dprintf(client_socket, ("Error: Message not delivered to " + name + "!").c_str());
@@ -93,8 +107,13 @@ void broadcast_message(int client_socket, string broadcast_msg){
 }
 
 void user_exit(int socket, char *username) {
+    for(auto &[name, conn_fds]: groups){ // Remove the user from all groups
+        leave_group(socket, name);
+    }
+    // Remove the user from all maps
     online_users.erase(username);
-    int ret = close(socket);
+    clients.erase(socket);
+    int ret = close(socket); // Close the connection
     assert(ret == 0);
 };
 
@@ -195,6 +214,7 @@ void process_connection(
 	assert (ret > 10);
 	clients[conn_fd] = uname_s;
 	online_users[uname_s] = conn_fd;
+    dprintf(conn_fd, "Welcome to the chat server!");
 
 	while (1) {
 		ret = read(conn_fd, sbuf, 1024);

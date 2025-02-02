@@ -8,23 +8,24 @@
 #include <thread>
 #include <unordered_set>
 #include <unordered_map>
+#include <bits/stdc++.h>
 
 using namespace std;
 
 unordered_map<int, string> clients; // Client socket -> username
+unordered_map<string, int> sockets;
 unordered_map<string, string> users; // Username -> password
 unordered_map<string, unordered_set<int>> groups; // Group -> client sockets
 
 // General APIs needed:
 int do_auth(string username, string password);
-void private_message(int client_socket, string user_name, string pvt_msg);
-void broadcast_message(int client_socket, string msg);
+
 void create_group(int client_socket, string group_name){
     groups[group_name] = unordered_set<int>();
     groups[group_name].insert(client_socket);
     // broadcast_message(-1, "Group created - "+group_name);
 }
-void user_exit(int client_socket, string username);
+void user_exit(int client_socket, char* username);
 void join_group(int client_socket, string group_name){
     if(groups.find(group_name)==groups.end()){
         // private_message(-1, clients[client_socket], "Group not found!");
@@ -65,16 +66,27 @@ int do_auth(string username, string password)
     return -1;
 }
 
-void private_message(int client_socket, string user_name, string pvt_msg) {
-	return ;
+void private_message(int client_socket, string user_name, string pvt_msg){
+    string msg = "[Private - "+clients[client_socket]+"]: "+pvt_msg;
+    if(sockets.find(user_name)!=sockets.end()){
+        if(dprintf(sockets[user_name], msg.c_str())<0){
+            dprintf(client_socket, "Error: Message not delivered!");
+        }
+    }
+}
+void broadcast_message(int client_socket, string broadcast_msg){
+    string msg = "[Broadcast - ]"+clients[client_socket]+"]: "+broadcast_msg;
+    for(auto &[conn_fd, name]: clients){
+        if(dprintf(conn_fd, msg.c_str())<0){
+            dprintf(client_socket, ("Error: Message not delivered to " + name + "!").c_str());
+        }
+    }
 }
 
-void broadcast_message(int client_socket, string msg) {
-	return ;
+void user_exit(int fd, char *username) {
+	return;
+	// todo: remove from online_users map, etc
 }
-
-void user_exit(int socket, string username) {
-};
 
 int process_client_message(char *buf){
     string message = buf;
@@ -122,7 +134,7 @@ int process_client_message(char *buf){
     }
     else {
 	    // invalid message
-	    printf("[server] can't understand message\n%s\n", buf);
+	    printf("Error: server can't understand message\n%s\n", buf);
 	    return 1;
     }
 
@@ -170,6 +182,7 @@ void process_connection(
 		ret = read(conn_fd, sbuf, 1024);
 		if (ret <= 0) {
 			printf("[server] looks like user %s left\n", username);
+			user_exit(conn_fd, username);
 			goto thread_exit;
 		}
 		printf("server received message from %s: (%d)\n%s\n\n", username, ret, sbuf);

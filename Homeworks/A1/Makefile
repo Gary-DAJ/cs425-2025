@@ -21,5 +21,5 @@ $(CLIENT_BIN): $(CLIENT_SRC)
 
 # Clean build artifacts
 clean:
-	rm -f $(SERVER_BIN) $(CLIENT_BIN)
+	rm -f $(SERVER_BIN) $(CLIENT_BIN) a.out
 

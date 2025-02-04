@@ -1,6 +1,5 @@
 #include <iostream>
 #include <cstring>
-#include <bits/stdc++.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
@@ -9,20 +8,103 @@
 #include <thread>
 #include <unordered_set>
 #include <unordered_map>
-#include <bits/stdc++.h>
+#include <fstream>
+#include <string>
+#include <mutex>
 
 using namespace std;
+
+// Thread-safe data structures
+mutex users_mutex;
+mutex clients_mutex;
+mutex groups_mutex;
 
 unordered_map<string, int> online_users;
 unordered_map<int, string> clients; // Client socket -> username
 unordered_map<string, string> users; // Username -> password
 unordered_map<string, unordered_set<int>> groups; // Group -> client sockets
 
-// General APIs needed:
-int do_auth(string username, string password);
-void private_message(int client_socket, string user_name, string pvt_msg);
-void broadcast_message(int client_socket, string broadcast_msg);
+void broadcast_message(int client_socket, const string& message) {
+    // client_socket < 0 for system messages
+    lock_guard<mutex> lock(clients_mutex);
+    string sender = clients[client_socket];
+    string msg = client_socket<0 ? message + "\n" : 
+    "[Broadcast (" + sender + ")]: " + message + "\n";
+    
+    for(const auto& [conn_fd, name] : clients) {
+        if(client_socket > 0 && write(conn_fd, msg.c_str(), msg.length()) < 0) {
+            dprintf(client_socket, ("Error: Message not delivered to %s!\n", name).c_str());
+        }
+    }
+}
+
+int do_auth(const string& username, const string& password, int fd) {
+    lock_guard<mutex> users_lock(users_mutex);
+    lock_guard<mutex> clients_lock(clients_mutex);
+    
+    if (users.find(username) != users.end()) {
+        if (users[username] == password) {
+            if (online_users.find(username) != online_users.end()) {
+                dprintf(fd, "Already logged in!\n");
+                return -1;
+            }
+            online_users[username] = fd;
+            clients[fd] = username;
+            
+            // Broadcast join message to all users
+            broadcast_message(-1, username + " has joined the chat.");
+            return 0;
+        }
+    }
+    return -1;
+}
+
+void user_exit(int client_socket, const string& username) {
+    {
+        lock_guard<mutex> groups_lock(groups_mutex);
+        // Remove user from all groups
+        for(auto& [name, members] : groups) {
+            members.erase(client_socket);
+            if(members.empty()) {
+                groups.erase(name);
+            }
+        }
+    }
+    
+    {
+        lock_guard<mutex> users_lock(users_mutex);
+        lock_guard<mutex> clients_lock(clients_mutex);
+        
+        // Remove user from online users and clients maps
+        online_users.erase(username);
+        clients.erase(client_socket);
+        
+        // Broadcast leave message to all users
+        broadcast_message(-1, username + " has left the server");
+    }
+    
+    close(client_socket);
+}
+
+void private_message(int client_socket, const string& user_name, const string& pvt_msg) {
+    lock_guard<mutex> lock(clients_mutex);
+    string sender = clients[client_socket];
+    string msg = "[Private (" + sender + ")]: " + pvt_msg + "\n";
+    
+    {
+        lock_guard<mutex> users_lock(users_mutex);
+        if(online_users.find(user_name) != online_users.end()) {
+            if(write(online_users[user_name], msg.c_str(), msg.length()) < 0) {
+                dprintf(client_socket, "Error: Message not delivered!\n");
+            }
+        } else {
+            dprintf(client_socket, "Error: User not online!\n");
+        }
+    }
+}
+
 void create_group(int client_socket, string group_name){
+    lock_guard<mutex> groups_lock(groups_mutex);
     if(groups.find(group_name)!=groups.end()){
         dprintf(client_socket, "Error: Group name already exists!");
     }else{
@@ -33,8 +115,9 @@ void create_group(int client_socket, string group_name){
         }
     }
 }
-void user_exit(int client_socket, char* username);
+
 void join_group(int client_socket, string group_name){
+    lock_guard<mutex> groups_lock(groups_mutex);
     if(groups.find(group_name)==groups.end()){
         dprintf(client_socket, ("Error: Group "+group_name+" does not exist!").c_str());
     }else{
@@ -44,7 +127,9 @@ void join_group(int client_socket, string group_name){
         }
     }
 }
+
 void group_message(int client_socket, string group_name, string group_msg){
+    lock_guard<mutex> groups_lock(groups_mutex);
     if(groups.find(group_name)==groups.end()){
         dprintf(client_socket, "Error: Group does not exist!");
     }else{
@@ -54,6 +139,7 @@ void group_message(int client_socket, string group_name, string group_msg){
         }
     }
 }
+
 void leave_group(int client_socket, string group_name){
     if(groups.find(group_name)==groups.end()){
         dprintf(client_socket, "Error: Group does not exist!");
@@ -62,60 +148,11 @@ void leave_group(int client_socket, string group_name){
             dprintf(conn_fd, ("\t["+group_name+"]: "+clients[client_socket]+" left the chat.").c_str());
         }
         groups[group_name].erase(client_socket);
-        if(groups[group_name].empty()){ // If no member is left in the group, delete it
-            groups.erase(group_name);
-        }
         // private_message(-1, clients[client_socket], "You left the group - "+group_name);
     }else{
         dprintf(client_socket, "Error: You are not part of the group!");
     }
 }
-
-int do_auth(string username, string password, int fd)
-{
-    if (users.find(username) != users.end()) {
-        if (users[username] == password) {
-            if (online_users.find(username) != online_users.end()) {
-                dprintf(fd, "[server] Already logged in!\n");
-                return -1;
-            }
-            online_users[username] = fd;
-            return 0;
-        }
-    }
-    return -1;
-}
-
-void private_message(int client_socket, string user_name, string pvt_msg){
-    string msg = "[Private: ("+clients[client_socket]+")]: "+pvt_msg;
-    if(online_users.find(user_name)!=online_users.end()){
-        if(dprintf(online_users[user_name], msg.c_str())<0){
-            dprintf(client_socket, "Error: Message not delivered!");
-        }
-    } else {
-            dprintf(client_socket, "Error: User not online!");
-    }
-
-}
-void broadcast_message(int client_socket, string broadcast_msg){
-    string msg = "[Broadcast: (]"+clients[client_socket]+")]: "+broadcast_msg;
-    for(auto &[conn_fd, name]: clients){
-        if(dprintf(conn_fd, msg.c_str())<0){
-            dprintf(client_socket, ("Error: Message not delivered to " + name + "!").c_str());
-        }
-    }
-}
-
-void user_exit(int socket, char *username) {
-    for(auto &[name, conn_fds]: groups){ // Remove the user from all groups
-        leave_group(socket, name);
-    }
-    // Remove the user from all maps
-    online_users.erase(username);
-    clients.erase(socket);
-    int ret = close(socket); // Close the connection
-    assert(ret == 0);
-};
 
 int process_client_message(char *buf, int sender_fd){
     string message = buf;
@@ -178,64 +215,62 @@ int process_client_message(char *buf, int sender_fd){
 }
 
 // This function is called in a new thread for each connection
-void process_connection(
-		int conn_fd
-		) {
-	std::thread::id tid = this_thread::get_id();
+void process_connection(int conn_fd) {
+    // Creating a new thread
+	thread::id tid = this_thread::get_id();
 	cout << "New thread; tid "<< tid << "\tpid: " << getpid() << "\tpgid: " << getpgid(0) << endl;
-	char username[64];
+	// Reading username and password
+    char username[64];
 	char password[64];
-	char auth1[] = "Enter username: ";
 	char sbuf[1024];
 	int ret;
 
-	ret = write(conn_fd, auth1, strlen(auth1) + 1);
-	cout << "server sent bytes " << ret << " to FD " << conn_fd << endl;
-	assert(ret == 17);
+	ret = dprintf(conn_fd, "Enter username: ");
+	assert(ret > 0);
 	ret = read(conn_fd, username, 64);
 	assert(ret < 63);
 	cout << "server received bytes: " << ret << " from FD " << conn_fd << endl;
 	string uname_s = username;
 
 	char auth2[] = "Enter password: ";
-	ret = write(conn_fd, auth2, strlen(auth1) + 1);
+	ret = dprintf(conn_fd, "Enter password: ");
 	cout << "server sent bytes " << ret << " to FD " << conn_fd << endl;
-	assert(ret == 17);
+	assert(ret > 0);
 	ret = read(conn_fd, password, 64);
 	assert(ret < 63);
 	cout << "server received bytes: " << ret << " from FD " << conn_fd << endl;
 
-	ret = do_auth(username, password, conn_fd);
-	if (ret == -1) {
-		dprintf(conn_fd, "Authentication failed");
+	if ( do_auth(username, password, conn_fd) == -1 ) {
+		dprintf(conn_fd, "Authentication failed\n");
 		goto thread_exit;
 	}
-	ret = dprintf(conn_fd, "Authentication successful");
-	assert (ret > 10);
-	clients[conn_fd] = uname_s;
+	ret = dprintf(conn_fd, "Authentication successful\n");
+	assert (ret > 0);
+	// Inserting the new user into the data structures
+    clients[conn_fd] = uname_s;
 	online_users[uname_s] = conn_fd;
-    dprintf(conn_fd, "Welcome to the chat server!");
+    dprintf(conn_fd, "Welcome to the chat server!\n");
 
 	while (1) {
 		ret = read(conn_fd, sbuf, 1024);
 		if (ret <= 0) {
-			printf("[server] looks like user %s left\n", username);
+			printf("[Server] Looks like user %s left\n", username);
 			user_exit(conn_fd, username);
 			goto thread_exit;
 		}
-		printf("server received message from %s: (%d)\n%s\n\n", username, ret, sbuf);
+		printf("Server received message from %s: (%d)\n%s\n\n", username, ret, sbuf);
 		ret = process_client_message(&sbuf[0], conn_fd);
-		if (ret == 1)
-			goto thread_exit;
 		memset(sbuf, 0, 1024);
-		// for now, the server echoes all messages twice
-		dprintf(conn_fd, "%s\n%s\n", sbuf, sbuf);
-		goto thread_exit;
 	}
 
 thread_exit:
 	ret = close(conn_fd);
-	online_users.erase(uname_s);
+    { // Removing the user details from the data structures
+        lock_guard<mutex> users_lock(users_mutex);
+        lock_guard<mutex> clients_lock(clients_mutex);
+        clients.erase(conn_fd);
+	    online_users.erase(uname_s);
+    }
 	assert(ret == 0);
 	cout << "*************** EXITING ************************" << endl;
 	cout << "New thread; tid "<< tid << "\tpid: " << getpid() << "\tpgid: " << getpgid(0) << endl;

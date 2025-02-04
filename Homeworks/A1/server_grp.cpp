@@ -24,16 +24,18 @@ unordered_map<int, string> clients; // Client socket -> username
 unordered_map<string, string> users; // Username -> password
 unordered_map<string, unordered_set<int>> groups; // Group -> client sockets
 
-void broadcast_message(int client_socket, const string& message) {
-    // client_socket < 0 for system messages
-    lock_guard<mutex> lock(clients_mutex);
-    string sender = clients[client_socket];
-    string msg = client_socket<0 ? message + "\n" : 
+void broadcast_message(int client_fd, const string& message) {
+    // client_fd < 0 for system messages
+    lock_guard<mutex> clients_lock(clients_mutex);
+    string sender = clients[client_fd];
+    string msg = client_fd<0 ? message + "\n" : 
     "[Broadcast (" + sender + ")]: " + message + "\n";
     
     for(const auto& [conn_fd, name] : clients) {
-        if(write(conn_fd, msg.c_str(), msg.length()) < 0 && client_socket > 0) {
-            dprintf(client_socket, "Error: Message not delivered to %s!\n", name.c_str());
+        if(conn_fd==client_fd) continue;
+        if(write(conn_fd, msg.c_str(), msg.length()) < 0
+             && client_fd > 0) {
+            dprintf(client_fd, "Error: Message not delivered to %s!\n", name.c_str());
         }
     }
 }
@@ -55,105 +57,101 @@ int do_auth(const string& username, const string& password, int fd) {
                 online_users[username] = fd;
                 clients[fd] = username;
             }
-
             return 0;
         }
     }
     return -1;
 }
 
-void user_exit(int client_socket, const string& username) {
+void user_exit(int client_fd) {
+    string username = clients[client_fd];
+    printf("[Server] Looks like user %s left\n", username);
     {
         lock_guard<mutex> groups_lock(groups_mutex);
         // Remove user from all groups
-        for(auto& [name, members] : groups) {
-            members.erase(client_socket);
-            if(members.empty()) {
-                groups.erase(name);
-            }
+        for(auto& [name, _] : groups) {
+            leave_group(client_fd, name);
         }
-    }
-    
-    {
+    }{
         lock_guard<mutex> users_lock(users_mutex);
         lock_guard<mutex> clients_lock(clients_mutex);
-        
         // Remove user from online users and clients maps
         online_users.erase(username);
-        clients.erase(client_socket);
-        
-        // Broadcast leave message to all users
-        broadcast_message(-1, username + " has left the server");
+        clients.erase(client_fd);
     }
-    
-    close(client_socket);
+
+    // Broadcast leave message to all users
+    broadcast_message(-1, username + " has left the server.");
+    close(client_fd);
 }
 
-void private_message(int client_socket, const string& user_name, const string& pvt_msg) {
+void private_message(int sender_fd, const string& recipient, const string& pvt_msg) {
     lock_guard<mutex> lock(clients_mutex);
-    string sender = clients[client_socket];
+    string sender = clients[sender_fd];
     string msg = "[Private (" + sender + ")]: " + pvt_msg + "\n";
     
     {
         lock_guard<mutex> users_lock(users_mutex);
-        if(online_users.find(user_name) != online_users.end()) {
-            if(write(online_users[user_name], msg.c_str(), msg.length()) < 0) {
-                dprintf(client_socket, "Error: Message not delivered!\n");
+        if(online_users.find(recipient) != online_users.end()) {
+            if(write(online_users[recipient], msg.c_str(), msg.length()) < 0) {
+                dprintf(sender_fd, "Error: Message not delivered!\n");
             }
         } else {
-            dprintf(client_socket, "Error: User not online!\n");
+            dprintf(sender_fd, "Error: User not online!\n");
         }
     }
 }
 
-void create_group(int client_socket, string group_name){
+void create_group(int client_fd, string group_name){
     lock_guard<mutex> groups_lock(groups_mutex);
     if(groups.find(group_name)!=groups.end()){
-        dprintf(client_socket, "Error: Group name already exists!");
+        dprintf(client_fd, "Error: Group name already exists!");
     }else{
         groups[group_name] = unordered_set<int>();
-        groups[group_name].insert(client_socket); // User who created the group is added to it
+        groups[group_name].insert(client_fd); // User who created the group is added to it
         for(auto &[conn_fd, _]: clients){ // All users online are informed about the new group
-            dprintf(conn_fd, ("Group "+group_name+" created by "+clients[client_socket]).c_str());
+            dprintf(conn_fd, "Group %s created by %s", group_name ,clients[client_fd]);
         }
     }
 }
 
-void join_group(int client_socket, string group_name){
+void join_group(int client_fd, string group_name){
     lock_guard<mutex> groups_lock(groups_mutex);
     if(groups.find(group_name)==groups.end()){
-        dprintf(client_socket, ("Error: Group "+group_name+" does not exist!").c_str());
+        dprintf(client_fd, ("Error: Group "+group_name+" does not exist!").c_str());
     }else{
-        groups[group_name].insert(client_socket); // Adding the user to the group
+        groups[group_name].insert(client_fd); // Adding the user to the group
         for(auto &conn_fd: groups[group_name]){ // All members of the group are informed about the new member
-            dprintf(conn_fd, ("\t["+group_name+"]: "+clients[client_socket]+" joined the chat.").c_str());
+            dprintf(conn_fd, ("\t["+group_name+"]: "+clients[client_fd]+" joined the chat.").c_str());
         }
     }
 }
 
-void group_message(int client_socket, string group_name, string group_msg){
+void group_message(int sender_fd, string group_name, string group_msg){
     lock_guard<mutex> groups_lock(groups_mutex);
-    if(groups.find(group_name)==groups.end()){
-        dprintf(client_socket, "Error: Group does not exist!");
+    if(groups.find(group_name)==groups.end()){ // Wrong group name
+        dprintf(sender_fd, "Error: Group does not exist!");
+    }else if(groups[group_name].find(sender_fd)==groups[group_name].end()){ // Only members can send messages in the group
+        dprintf(sender_fd, "Error: You are not a member of this group!");
     }else{
-        string message = "\t["+group_name+": " + "("+clients[client_socket]+")]: " + group_msg;
+        string message = "\t["+group_name+": " + "("+clients[sender_fd]+")]: " + group_msg;
         for(int conn_fd : groups[group_name]){
             dprintf(conn_fd, message.c_str());
         }
     }
 }
 
-void leave_group(int client_socket, string group_name){
+void leave_group(int client_fd, string group_name){
     if(groups.find(group_name)==groups.end()){
-        dprintf(client_socket, "Error: Group does not exist!");
-    }else if(groups[group_name].erase(client_socket)){
+        dprintf(client_fd, "Error: Group does not exist!");
+    }else if(groups[group_name].erase(client_fd)){
         for(auto &conn_fd: group_name){ // Inform all group members that the member has left
-            dprintf(conn_fd, ("\t["+group_name+"]: "+clients[client_socket]+" left the chat.").c_str());
+            dprintf(conn_fd, ("\t["+group_name+"]: "+clients[client_fd]+" left the chat.").c_str());
         }
-        groups[group_name].erase(client_socket);
-        // private_message(-1, clients[client_socket], "You left the group - "+group_name);
+        groups[group_name].erase(client_fd);
+        // private_message(-1, clients[client_fd], "You left the group - "+group_name);
     }else{
-        dprintf(client_socket, "Error: You are not part of the group!");
+        dprintf(client_fd, "Error: You are not a member of this group!");
     }
 }
 
@@ -165,14 +163,7 @@ int process_client_message(char *buf, int sender_fd){
         if(space1 != string::npos && space2 != string::npos){
             string user_name = message.substr(space1 + 1, space2 - space1 - 1);
             string pvt_msg = message.substr(space2 + 1);
-            if (online_users.find(user_name) == online_users.end()) {
-                dprintf(sender_fd, "[server] Error: user %s is not online", user_name.c_str());
-                return 10;
-            }
-            auto it = online_users.find(user_name);
-            assert(it != online_users.end());
-            int recipient_fd = it->second;
-            private_message(recipient_fd, user_name, pvt_msg);
+            private_message(sender_fd, user_name, pvt_msg);
         }
     }else if(message.starts_with("/broadcast")){
         size_t space = message.find(' ');
@@ -208,7 +199,7 @@ int process_client_message(char *buf, int sender_fd){
         }
     }else if(message.starts_with("/exit_chat")){
         dprintf(sender_fd, "Good bye!");
-        user_exit(sender_fd, clients[sender_fd]);
+        user_exit(sender_fd);
     }else {
 	    // invalid message
 	    dprintf(sender_fd, "Error: server can't understand message\n%s\n", buf);
@@ -259,8 +250,7 @@ void process_connection(int conn_fd) {
 	while (1) {
 		ret = read(conn_fd, sbuf, 1024);
 		if (ret <= 0) {
-			printf("[Server] Looks like user %s left\n", username);
-			user_exit(conn_fd, username);
+			user_exit(conn_fd);
 			goto thread_exit;
 		}
 		printf("Server received message from %s: (%d)\n%s\n\n", username, ret, sbuf);

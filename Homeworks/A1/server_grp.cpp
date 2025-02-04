@@ -32,27 +32,30 @@ void broadcast_message(int client_socket, const string& message) {
     "[Broadcast (" + sender + ")]: " + message + "\n";
     
     for(const auto& [conn_fd, name] : clients) {
-        if(client_socket > 0 && write(conn_fd, msg.c_str(), msg.length()) < 0) {
-            dprintf(client_socket, ("Error: Message not delivered to %s!\n", name).c_str());
+        if(write(conn_fd, msg.c_str(), msg.length()) < 0 && client_socket > 0) {
+            dprintf(client_socket, "Error: Message not delivered to %s!\n", name.c_str());
         }
     }
 }
 
 int do_auth(const string& username, const string& password, int fd) {
-    lock_guard<mutex> users_lock(users_mutex);
-    lock_guard<mutex> clients_lock(clients_mutex);
-    
     if (users.find(username) != users.end()) {
         if (users[username] == password) {
             if (online_users.find(username) != online_users.end()) {
                 dprintf(fd, "Already logged in!\n");
                 return -1;
             }
-            online_users[username] = fd;
-            clients[fd] = username;
-            
+
             // Broadcast join message to all users
             broadcast_message(-1, username + " has joined the chat.");
+            
+            {
+                lock_guard<mutex> users_lock(users_mutex);
+                lock_guard<mutex> clients_lock(clients_mutex);
+                online_users[username] = fd;
+                clients[fd] = username;
+            }
+
             return 0;
         }
     }
@@ -204,10 +207,14 @@ int process_client_message(char *buf, int sender_fd){
             string group_name = message.substr(space + 1);
             leave_group(client_socket, group_name);
         }
+    }else if(message.starts_with("/exit")){
+        dprintf(client_socket, "Good bye!");
+        dprintf(1, "Good bye!");
+        user_exit(client_socket, clients[client_socket]);
     }
     else {
 	    // invalid message
-	    printf("Error: server can't understand message\n%s\n", buf);
+	    dprintf(client_socket, "Error: server can't understand message\n%s\n", buf);
 	    return 1;
     }
 
@@ -229,15 +236,16 @@ void process_connection(int conn_fd) {
 	assert(ret > 0);
 	ret = read(conn_fd, username, 64);
 	assert(ret < 63);
+    username[ret] = '\0';
 	cout << "server received bytes: " << ret << " from FD " << conn_fd << endl;
 	string uname_s = username;
 
-	char auth2[] = "Enter password: ";
 	ret = dprintf(conn_fd, "Enter password: ");
 	cout << "server sent bytes " << ret << " to FD " << conn_fd << endl;
 	assert(ret > 0);
 	ret = read(conn_fd, password, 64);
 	assert(ret < 63);
+    password[ret] = '\0';
 	cout << "server received bytes: " << ret << " from FD " << conn_fd << endl;
 
 	if ( do_auth(username, password, conn_fd) == -1 ) {

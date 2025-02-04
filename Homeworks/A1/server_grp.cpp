@@ -159,7 +159,6 @@ void leave_group(int client_socket, string group_name){
 
 int process_client_message(char *buf, int sender_fd){
     string message = buf;
-    int client_socket = 1;
     if(message.starts_with("/msg")){
         size_t space1 = message.find(' ');
         size_t space2 = message.find (' ', space1 + 1);
@@ -179,19 +178,19 @@ int process_client_message(char *buf, int sender_fd){
         size_t space = message.find(' ');
         if(space != string::npos){
             string msg = message.substr(space + 1);
-            broadcast_message(client_socket, msg);
+            broadcast_message(sender_fd, msg);
         }
     }else if(message.starts_with("/create_group")){
         size_t space = message.find(' ');
         if(space != string::npos){
             string group_name = message.substr(space + 1);
-            create_group(client_socket, group_name);
+            create_group(sender_fd, group_name);
         }
     }else if(message.starts_with("/join_group")){
         size_t space = message.find(' ');
         if(space != string::npos){
             string group_name = message.substr(space + 1);
-            join_group(client_socket, group_name);
+            join_group(sender_fd, group_name);
         }
     }else if(message.starts_with("/group_msg")){
         size_t space1 = message.find(' ');
@@ -199,22 +198,20 @@ int process_client_message(char *buf, int sender_fd){
         if(space1 != string::npos && space2 != string::npos){
             string group_name = message.substr(space1 + 1, space2 - space1 - 1);
             string group_msg = message.substr(space2 + 1);
-            group_message(client_socket, group_name, group_msg);
+            group_message(sender_fd, group_name, group_msg);
         }
     }else if(message.starts_with("/leave_group")){
         size_t space = message.find(' ');
         if(space != string::npos){
             string group_name = message.substr(space + 1);
-            leave_group(client_socket, group_name);
+            leave_group(sender_fd, group_name);
         }
-    }else if(message.starts_with("/exit")){
-        dprintf(client_socket, "Good bye!");
-        dprintf(1, "Good bye!");
-        user_exit(client_socket, clients[client_socket]);
-    }
-    else {
+    }else if(message.starts_with("/exit_chat")){
+        dprintf(sender_fd, "Good bye!");
+        user_exit(sender_fd, clients[sender_fd]);
+    }else {
 	    // invalid message
-	    dprintf(client_socket, "Error: server can't understand message\n%s\n", buf);
+	    dprintf(sender_fd, "Error: server can't understand message\n%s\n", buf);
 	    return 1;
     }
 

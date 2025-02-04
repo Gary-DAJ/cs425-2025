@@ -7,15 +7,15 @@
 ## Server Policies
 - One user can have only one live login at a time.
 - The server makes an announcement when any user joins or leaves.
+- Any user can shut down the server.
 ### Implemented Features
 - We have implemented all features listed in the assignment description.
-- To shut down the server gracefully, we added a `/killserver` command. This frees up the port.
+- To shut down the server gracefully, we added a `/killserver` command. This frees up the port without rebooting the system.
 
 ### Possible Improvements
 - Make a command to list users and groups available.
-- Permit admin login to remove malicious users and shut down server when needed.
-
-
+- Permit admin login to remove malicious use
+- Don't permit all users to shut down the server.
 
 ## Design Choices
 ### Multithreading
@@ -80,14 +80,24 @@ We made this file after modifying the given client code, `client_grp.cpp`.
 We hard-code the user's behaviour in it, such that we know the expected server behaviour 
 and can compare it with the observed behaviour.  
 Its flow is as follows:
-- We log in using 10 clients' credentials using a script.
-- Each login causes an announcement. After the first client sees 9 announcements, 
+- We log in using 20 clients' credentials using a script.
+- Each login causes an announcement. After the first client sees 19 announcements, 
 it makes a broadcast.
-- At this point, the second client sees 9 messages (8 new users and one broadcast), 
+- At this point, the second client sees 19 messages (18 new users and one broadcast), 
 and sends out another broadcast.
-- Finally, all 10 clients have sent one message each and received 9-18 messages. If
-this does not happen, the client raises an error.
+- Finally, all 10 clients have sent one message each and received at least 19 messages.
+- If this does not happen, the client raises an error.
+- The number 20 is configurable via a macro and in the script added.
+```sh
+# Testing server with multiple clients
+./server_grp
 
+# open in another terminal
+./create_20_custom_clients.sh
+
+# Expect some messages from the clients. In case of error, error messages 
+# will be printed
+```
 
 ## Restrictions
 - Each connection needs a new thread with a default stack size of 8 MB. This limits 

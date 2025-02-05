@@ -10,7 +10,7 @@
 - Any user can shut down the server.
 ### Implemented Features
 - We have implemented all features listed in the assignment description.
-- To shut down the server gracefully, we added a `/killserver` command. This frees up the port without rebooting the system.
+- To shut down the server gracefully, we added a `/kill_server` command. This frees up the port without rebooting the system.
 
 ### Possible Improvements
 - Make a command to list users and groups available.
@@ -33,13 +33,19 @@
 - `dprintf()`, which directly prints to a file descriptor is even simpler as it allows us to use format specifiers, and overlook the buffer size calculation.
 
 ## Implementation
-- We use global maps to store lists of online users, their sockets and authentication details. They are protected by mutexes.
+- We use global maps to store lists of online users, their sockets and 
+  authentication details. They are protected by mutexes.
 
 ### Key Data Structures Used
-- `unordered_map<string, int> online_users` is a mapping from usernames to sockets for logged-in users. This is protected by `std::mutex online_users_mutex`.
-- `unordered_map<int, string> clients` maps sockets to usernames. This is used to fetch usernames from sets of sockets connected to a group.
-- `unordered_map<string, string> users` stores username-password pairs. It is initialized upon setting up the server.
-- `unordered_map<string, unordered_set<int>> groups` maps group names to sets of sockets connected. It is protected by `std::mutex group_creation_mutex`.
+- `unordered_map<string, int> online_users` is a mapping from usernames to sockets
+for logged-in users. This is protected by `std::mutex users_mutex`.
+- `unordered_map<int, string> clients` maps sockets to usernames. This is used to 
+ fetch usernames from sets of sockets connected to a group.
+- `unordered_map<string, string> users` stores username-password pairs. It is
+initialized upon setting up the server.
+- `unordered_map<string, unordered_set<int>> groups` maps group names to sets
+of sockets connected. It is protected by `std::mutex groups_mutex`.
+- `clients_mutex` protects the socket-to-username map.
 
 ### Handling Errors and Exceptions
 - Errors and unreliable behaviour are common in distributed systems. Thus, we need a robust mechanism to handle them.

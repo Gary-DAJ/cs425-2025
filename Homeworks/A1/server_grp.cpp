@@ -24,9 +24,14 @@ unordered_map<int, string> clients; // Client socket -> username
 unordered_map<string, string> users; // Username -> password
 unordered_map<string, unordered_set<int>> groups; // Group -> client sockets
 
+int server_fd; // need to be global to kill server and free port 
+               // from any thread
+unordered_set<int> client_socket_set;
+
 void load_users();
 int do_auth(const string& username, const string& password, int fd);
 void user_exit(int client_fd);
+void kill_all_conns();
 
 void broadcast_message(int sender_fd, const string& message) {
     // We use sender_fd < 0 to broadcast system messages
@@ -36,9 +41,10 @@ void broadcast_message(int sender_fd, const string& message) {
 
     for(const auto& [conn_fd, name] : clients) {
         if(conn_fd==sender_fd) continue;
+	if (conn_fd < 0) continue;
         // dprintf(conn_fd, "trying to send a message from FD %d\n", conn_fd);
         if(dprintf(conn_fd, msg.c_str()) < 0 && sender_fd > 0) { // If message is not delivered
-            cout << "Error: Message not delivered to "<< name << endl;
+            cout << "Error: Message not delivered to "<< name << conn_fd << endl;
         }
     }
 }
@@ -167,6 +173,10 @@ int process_client_message(char *buf, int sender_fd){
         }
     }else if(message.starts_with("/exit_chat")){
         user_exit(sender_fd);
+    } else if (message.starts_with("/kill_server")) {
+	    cout << "Server shut down, asked to kill_server by " << clients[sender_fd] << endl;
+	    kill_all_conns();
+	    exit(0);
     }else {
         // invalid message
         dprintf(sender_fd, "Error: server can't understand message\n%s\n", buf);
@@ -241,7 +251,7 @@ thread_exit:
 }
 
 int main () {
-    int server_fd, new_socket;
+    int new_socket;
 
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
     assert(server_fd > 0);
@@ -258,7 +268,7 @@ int main () {
 
     load_users();
     int ret = bind(server_fd, (struct sockaddr *) &sock_addr, sizeof(sock_addr));
-    assert(ret == 0);
+    assert(ret == 0 /* wait till the port frees up. and don't ctrl-C */);
 
     ret = listen(server_fd, 5);
     assert(ret == 0);
@@ -269,6 +279,7 @@ int main () {
     while (1) {
         new_socket = accept(server_fd, (struct sockaddr *)&sock_addr, &sock_size);
         assert(new_socket > 0);
+	client_socket_set.insert(new_socket);
         std::thread t_conn(process_connection, new_socket);
 
         t_conn.detach();
@@ -342,3 +353,12 @@ void user_exit(int client_fd) {
         clients.erase(client_fd);
     }
 }
+
+void kill_all_conns() {
+	for (auto [fd, _] : clients) {
+		dprintf(fd, "Server shutting down!\n");
+		close(fd);
+	}
+	close(server_fd);
+}
+

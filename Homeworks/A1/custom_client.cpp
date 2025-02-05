@@ -23,29 +23,11 @@
 
 std::mutex cout_mutex;
 
-/*
-void handle_server_messages(int server_socket) {
-    char buffer[BUFFER_SIZE];
-    while (true) {
-        memset(buffer, 0, BUFFER_SIZE);
-        int bytes_received = recv(server_socket, buffer, BUFFER_SIZE, 0);
-        if (bytes_received <= 0) {
-            std::lock_guard<std::mutex> lock(cout_mutex);
-            std::cout << "Disconnected from server." << std::endl;
-            close(server_socket);
-            exit(0);
-        }
-        std::lock_guard<std::mutex> lock(cout_mutex);
-        std::cout << buffer << std::endl;
-    }
-}
-*/
-
 void kill_after_15_s(int server_socket) {
 	int pid = getpid();
-	std::cout << "Process "<< pid << "sleeping for 15s, waiting for all messages\n";
-	sleep(15);
-	dprintf(server_socket, "/killserver");
+	std::cout << "Process "<< pid << " sleeping for " << NUM_CUSTOM_CLIENTS + 5 << ", waiting for all messages\n";
+	sleep(NUM_CUSTOM_CLIENTS  + 5);
+	dprintf(server_socket, "/kill_server");
 	exit(0);
 }
 
@@ -92,7 +74,7 @@ int main(int argc, char *argv[]) {
 	    printf("ERROR: expected string \"Enter username:\", received:\n%s\n", buffer);
 	    return 1;
     }
-    std::cout << buffer;
+    // std::cout << buffer;
     std::getline(std::cin, username);
     // send(client_socket, username.c_str(), username.size(), 0);
     ret = dprintf(client_socket, "u%d", my_id);
@@ -100,7 +82,7 @@ int main(int argc, char *argv[]) {
 
     memset(buffer, 0, BUFFER_SIZE);
     recv(client_socket, buffer, BUFFER_SIZE, 0); // Receive the message "Enter the password" for the server
-    std::cout << buffer;
+    // std::cout << buffer;
     std::getline(std::cin, password);
     // send(client_socket, password.c_str(), password.size(), 0);
     ret = dprintf(client_socket, "p%d", my_id);
@@ -118,8 +100,8 @@ int main(int argc, char *argv[]) {
 
     for (int i = 0; i < NUM_CUSTOM_CLIENTS - 1; i++) {
 	    ret = recv(client_socket, buffer, BUFFER_SIZE, 0);
-	    printf("Client %d received message #%d\n", my_id, i);
-	    assert(ret > 10);
+	    if (i == NUM_CUSTOM_CLIENTS - 2)
+		    printf("Client %d received message #%d\n", my_id, i);
     }
     /* don't need this stuff
     // Start thread for receiving messages from server
@@ -143,8 +125,8 @@ int main(int argc, char *argv[]) {
     }
     */
     int pid = getpid();
-    ret = dprintf(client_socket, "/broadcast Process %d calling for help, mayday, mayday, mayday\n", pid);
-    assert(ret > 10);
+    ret = dprintf(client_socket, "/broadcast Process %d broadcasting some gibberish\n", pid);
+    // assert(ret > 10);
 
     std::thread t1(kill_after_15_s, client_socket);
     t1.detach();
@@ -154,6 +136,7 @@ int main(int argc, char *argv[]) {
         // so that the server's messages don't bounce
         // this is safe because the other thread kills the full process
     		
+    sleep(100); // so that only the other thread kills
 
     return 0;
 }

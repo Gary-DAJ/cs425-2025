@@ -41,7 +41,7 @@ void broadcast_message(int sender_fd, const string& message) {
 
     for(const auto& [conn_fd, name] : clients) {
         if(conn_fd==sender_fd) continue;
-	if (conn_fd < 0) continue;
+        if (conn_fd < 0) continue;
         // dprintf(conn_fd, "trying to send a message from FD %d\n", conn_fd);
         if(dprintf(conn_fd, msg.c_str()) < 0 && sender_fd > 0) { // If message is not delivered
             cout << "Error: Message not delivered to "<< name << conn_fd << endl;
@@ -174,9 +174,9 @@ int process_client_message(char *buf, int sender_fd){
     }else if(message.starts_with("/exit_chat")){
         user_exit(sender_fd);
     } else if (message.starts_with("/kill_server")) {
-	    cout << "Server shut down, asked to kill_server by " << clients[sender_fd] << endl;
-	    kill_all_conns();
-	    exit(0);
+        cout << "Server shut down, asked to kill_server by " << clients[sender_fd] << endl;
+        kill_all_conns();
+        exit(0);
     }else {
         // invalid message
         dprintf(sender_fd, "Error: server can't understand message\n%s\n", buf);
@@ -192,7 +192,7 @@ int process_client_message(char *buf, int sender_fd){
 void process_connection(int conn_fd) {
     // Creating a new thread
     thread::id tid = this_thread::get_id();
-    cout << "New thread; tid "<< tid << "\tpid: " << getpid() << "\tpgid: " << getpgid(0) << endl;
+    // cout << "New thread; tid "<< tid << "\tpid: " << getpid() << "\tpgid: " << getpgid(0) << endl;
     // Reading username and password
     char username[64];
     char password[64];
@@ -246,8 +246,8 @@ thread_exit:
         clients.erase(conn_fd);
         online_users.erase(uname_s);
     }
-    cout << "*************** EXITING ************************" << endl;
-    cout << "New thread; tid "<< tid << "\tpid: " << getpid() << "\tpgid: " << getpgid(0) << endl;
+    // cout << "*************** EXITING ************************" << endl;
+    // cout << "New thread; tid "<< tid << "\tpid: " << getpid() << "\tpgid: " << getpgid(0) << endl;
 }
 
 int main () {
@@ -279,7 +279,7 @@ int main () {
     while (1) {
         new_socket = accept(server_fd, (struct sockaddr *)&sock_addr, &sock_size);
         assert(new_socket > 0);
-	client_socket_set.insert(new_socket);
+        client_socket_set.insert(new_socket);
         std::thread t_conn(process_connection, new_socket);
 
         t_conn.detach();
@@ -355,10 +355,10 @@ void user_exit(int client_fd) {
 }
 
 void kill_all_conns() {
-	for (auto [fd, _] : clients) {
-		dprintf(fd, "Server shutting down!\n");
-		close(fd);
-	}
-	close(server_fd);
+    for (auto [fd, _] : clients) {
+        dprintf(fd, "Server shutting down!\n");
+        close(fd);
+    }
+    close(server_fd);
 }
 

@@ -26,7 +26,6 @@ unordered_map<string, unordered_set<int>> groups; // Group -> client sockets
 
 int server_fd; // need to be global to kill server and free port 
                // from any thread
-unordered_set<int> client_socket_set;
 
 void load_users();
 int do_auth(const string& username, const string& password, int fd);
@@ -43,7 +42,7 @@ void broadcast_message(int sender_fd, const string& message) {
         if(conn_fd==sender_fd) continue;
         if (conn_fd < 0) continue;
         // dprintf(conn_fd, "trying to send a message from FD %d\n", conn_fd);
-        if(dprintf(conn_fd, msg.c_str()) < 0 && sender_fd > 0) { // If message is not delivered
+        if(dprintf(conn_fd, "%s", msg.c_str()) < 0 && sender_fd > 0) { // If message is not delivered
             cout << "Error: Message not delivered to "<< name << conn_fd << endl;
         }
     }
@@ -58,7 +57,7 @@ void private_message(int sender_fd, const string& recipient, const string& pvt_m
     {
         lock_guard<mutex> users_lock(users_mutex);
         if(online_users.find(recipient) != online_users.end()) { // If recipient is online
-            if(dprintf(rec_fd, msg.c_str()) < 0) { // If message is not delivered
+            if(dprintf(rec_fd, "%s", msg.c_str()) < 0) { // If message is not delivered
                 dprintf(sender_fd, "Error: Message not delivered!\n");
             }
         } else {
@@ -76,7 +75,7 @@ void create_group(int client_fd, string group_name){
         groups[group_name].insert(client_fd); // User who created the group is added to it
         for(auto &[conn_fd, _]: clients){ // All users online are informed about the new group
             string msg = ("Group "+group_name+" created by "+clients[client_fd]);
-            dprintf(conn_fd, msg.c_str());
+            dprintf(conn_fd, "%s", msg.c_str());
         }
     }
 }
@@ -85,7 +84,7 @@ void join_group(int client_fd, string group_name){
 
     if(groups.find(group_name)==groups.end()){
         string msg = ("Error: Group "+group_name+" does not exist!");
-        dprintf(client_fd, (const char *) msg.c_str());
+        dprintf(client_fd, "%s", msg.c_str());
     }else if(groups[group_name].find(client_fd)!=groups[group_name].end()){ // User already in the group
         dprintf(client_fd, "You have already joined the group.");
     }else{
@@ -95,7 +94,7 @@ void join_group(int client_fd, string group_name){
         }
         for(auto &conn_fd: groups[group_name]){ // All members of the group are informed about the new member
             string msg = ("\t["+group_name+"]: "+clients[client_fd]+" joined the chat.");
-            dprintf(conn_fd, msg.c_str());
+            dprintf(conn_fd, "%s",msg.c_str());
         }
     }
 }
@@ -109,7 +108,7 @@ void group_message(int sender_fd, string group_name, string group_msg){
     }else{
         string message = "\t["+group_name+": " + "("+clients[sender_fd]+")]: " + group_msg;
         for(int conn_fd : groups[group_name]){
-            dprintf(conn_fd, message.c_str());
+            dprintf(conn_fd, "%s", message.c_str());
         }
     }
 }
@@ -120,7 +119,7 @@ void leave_group(int client_fd, string group_name){
     }else if(groups[group_name].erase(client_fd)){
         for(auto &conn_fd: groups[group_name]){ // Inform all group members that the member has left
             string msg = ("\t["+group_name+"]: "+clients[client_fd]+" left the chat.");
-            dprintf(conn_fd, msg.c_str());
+            dprintf(conn_fd, "%s", msg.c_str());
         }
         groups[group_name].erase(client_fd);
         // private_message(-1, clients[client_fd], "You left the group - "+group_name);
@@ -191,7 +190,6 @@ int process_client_message(char *buf, int sender_fd){
 // This function is called in a new thread for each connection
 void process_connection(int conn_fd) {
     // Creating a new thread
-    thread::id tid = this_thread::get_id();
     // cout << "New thread; tid "<< tid << "\tpid: " << getpid() << "\tpgid: " << getpgid(0) << endl;
     // Reading username and password
     char username[64];
@@ -279,7 +277,6 @@ int main () {
     while (1) {
         new_socket = accept(server_fd, (struct sockaddr *)&sock_addr, &sock_size);
         assert(new_socket > 0);
-        client_socket_set.insert(new_socket);
         std::thread t_conn(process_connection, new_socket);
 
         t_conn.detach();
@@ -335,6 +332,8 @@ int do_auth(const string& username, const string& password, int fd) {
 
 void user_exit(int client_fd) {
     string username = clients[client_fd];
+    if (client_fd < 0)
+	return;
     printf("[Server] Looks like user %s left\n", username.c_str());
     // Broadcast leave message to all users
     broadcast_message(-1, username + " has left the server.");

@@ -129,6 +129,7 @@ and sends out another broadcast.
 # Expect some messages from the clients. In case of error, error messages 
 # will be printed
 ```
+- With this script, we found that our server can handle up to 25 connections at a time.
 
 ## Restrictions
 - Each connection needs a new thread with a default stack size of 8 MB. This limits 

@@ -17,6 +17,29 @@
 - Permit admin login to remove malicious use
 - Don't permit all users to shut down the server.
 
+## Usage
+- We have modified the given `Makefile`. Please use the one we have submitted.
+- First, compile the C++ programs:
+```sh
+make
+```
+- Next, run the server and multiple clients in separate terminals
+```sh
+# To start the server
+./server_grp
+
+# In a separate console, to log in as a client:
+./client_grp
+```
+- To test the functioning using our custom hard-coded client code:
+```sh
+# The "&" runs the two scripts in parallel
+# If any error occurs, it will be notified on the screen
+./server_grp & ./create_20_custom_clients.sh
+```
+- To increase the load for stress-testing, modify the `NUM_CUSTOM_CLIENTS` macro
+in `custom_client.cpp` and change the `for` loop in the script to the same number.
+
 ## Design Choices
 ### Multithreading
 - By default, the network IO calls used are blocking in nature. Thus, to listen to multiple clients at once, we have two options:
@@ -79,8 +102,10 @@ necessary in this section.
 ### Challenges in Testing
 - Server behaviour depends on the order in which messages are received. This 
 is very non-deterministic, and it is difficult to automate testing.
+- It is also difficult to create test cases, as multiple programs execute
+at the same time.
 
-### Testing Using a Custom Client
+### Stress-Testing Using a Custom Client and Script
 For testing our server, we designed a custom client (`custom_client.cpp`).   
 We made this file after modifying the given client code, `client_grp.cpp`.   
 We hard-code the user's behaviour in it, such that we know the expected server behaviour 

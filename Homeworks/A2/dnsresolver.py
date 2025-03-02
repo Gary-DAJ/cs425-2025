@@ -23,12 +23,13 @@ def send_dns_query(server, domain, recursive = False):
     """
     try:
         query = dns.message.make_query(domain, dns.rdatatype.A)  # Construct the DNS query
+        # Recursion is specified via the RD bit in the header.
         if (recursive):
             query.flags |= dns.flags.RD
         else:
             query.flags &= ~(dns.flags.RD)
-        # TODO: Send the query using UDP 
-        # Note that above TODO can be just a return statement with the UDP query!
+
+        # TODO 1
         response = dns.query.udp(query, server, timeout=TIMEOUT)
         if response.rcode() == 3:
             print(f"[ERROR] Domain does not exist!")
@@ -53,13 +54,28 @@ def extract_next_nameservers(response):
         if debug:
             print("response errors", response.errors)
 
+    """
+    Possibilities:
+        - The final answer is present in the response: then iterative_dns_lookup()
+          does not call this function.
+        - The response has the name of the TLD/authoritative server under 
+          response.authority. Extract the names
+        - response.additional may have the IP addresses for the above names,
+          but sometimes we need to find the name ourselves. In that case, use 
+          the DNS library's helper.
+    """
     for rrset in response.authority:
         if rrset.rdtype == dns.rdatatype.NS:
             for rr in rrset:
                 ns_name = rr.to_text()
                 ns_names.append(ns_name)  # Extract nameserver hostname
                 print(f"Extracted NS hostname: {ns_name}")
+
+    ## OUR CHANGES BEGIN HERE !!!
         elif rrset.rdtype == dns.rdatatype.SOA:
+            # found this in some websites. But these websites are restricted to 
+            # other LANs.
+
             # print("SOA type") # try poorvi.cse.iitd.ac.in
             rr = rrset[0]
             if debug:
@@ -77,26 +93,36 @@ def extract_next_nameservers(response):
             ns_names.append(ns_name)  # Extract nameserver hostname
             print(f"Extracted NS hostname: {ns_name} FROM SOA TYPE")
         elif rrset.rdtype == dns.rdatatype.CNAME:
+            # Canonical names: this will be handled by the upper-level function.
             if debug:
                 print("CNAME")
 
 
+    # extract ip addresses. check that they belong to the required TLD/AUTH servers
     for rrset in response.additional:
         name = rrset.to_text()
         ipversion = name.split()[3]
+        # using asserts to check that we have the right field
+        # ipversion is A for IPv4, AAAA for IPv6, might have some other values
         assert(ipversion in ["AAAA", "A",  "MX", "CNAME"])
-        # get IPv4 addresses
+        # skip IPv6 addresses
         if ipversion == "AAAA":
             continue
+
         address = name.split()[-1]
         assert(address[0].isdigit() and address[-1].isdigit() and address.count('.') == 3)
 
+        # get the resource record
+        # confirm that it is a NS we want
         rr = rrset[0]
         address = rr.to_text()
         name = rrset.name.to_text()
         if (name in ns_names):
             ns_ips.append(address)
+            print(f"Resolved {name} to {address}")
 
+    # sometimes, there is no iP address in the response. find it manually
+    # for eahc nameserver
     if response.additional == [] or ns_ips == []:
         if debug: print("no additional section in response")
         for ns_name in ns_names:
@@ -108,6 +134,7 @@ def extract_next_nameservers(response):
 
     # TODO: Resolve the extracted NS hostnames to IP addresses
     # To TODO, you would have to write a similar loop as above
+    ### DONE ABOVE
 
     
     return ns_ips  # Return list of resolved nameserver IPs
@@ -124,6 +151,10 @@ def iterative_dns_lookup(domain):
     stage = "ROOT"  # Track resolution stage (ROOT, TLD, AUTH)
     original_domain = domain # in case we go down a CNAME loop
 
+    # loop over stages of resolution
+    # At each stage, next_ns_list is the list of servers to try.
+    # when one of them succeeds, we replace the list with the next stage's list
+    # when there is a failure, we remove it from the list and retry
     while next_ns_list:
         if debug: print("====================================================================")
         ns_ip = next_ns_list[0]  # Pick the first available nameserver to query
@@ -137,17 +168,31 @@ def iterative_dns_lookup(domain):
                 print("***** BEGIN RESPONSE *****")
                 print(response.to_text())
                 print("***** END RESPONSE *****")
+            # if we are lucky, we have the exact answer by now
+            # or, we have the cname
             if response.answer:
                 cname = ""
+                # success is true if >=1 of the RRs is correct. don't exit directly
+                #  because there might be multiple IP addresses for one domain (aliasing)
+                # so, we will set success = 1 and exit AFTER the for loop
+                success = False
+
                 for i in response.answer:
+                    if debug: print(i)
                     if i.rdtype == dns.rdatatype.A:
                         print(f"[SUCCESS] {original_domain} -> {i[0]}")
-                        return
+                        success = True
                     elif i.rdtype == dns.rdatatype.CNAME:
                         cname = (i.to_text().split()[-1])
+
+                # found a answer
+                if success:
+                    return
                 if debug: print("maybe we got a CNAME response?")
                 if debug: print(cname)
                 cname = str(cname)
+                # if we are here, we did NOT get any answer but got some CNAME
+                # restart resolution from root with the new name
                 if cname:
                     if cname[-1] == ".":
                         cname = cname[:-1]
@@ -156,6 +201,8 @@ def iterative_dns_lookup(domain):
                     stage = "ROOT"
                     # repeat the process without resetting ns_ip
                     continue
+
+            # all these are handled by extract_next_nameservers()
             elif response.authority:
                 if debug: print("got response.authority")
             elif response.additional:
@@ -173,6 +220,7 @@ def iterative_dns_lookup(domain):
             else:
                 if debug: print("***")
         else:
+            # failure: try the next server
             next_ns_list = next_ns_list[1:]
             if ns_ip == []:
                 print(f"[ERROR] Query failed for {stage} {ns_ip}")

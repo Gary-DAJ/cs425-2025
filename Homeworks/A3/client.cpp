@@ -92,6 +92,7 @@ void receive_syn_ack() {
 
 int main() {
     int sockfd;
+    sleep(2);
 
     // Create raw socket for sending
     if ((sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_RAW)) < 0) {
